@@ -1,0 +1,222 @@
+---
+title: "Comparing Voting Difficulty Between Democrats and Republicans"
+author: "Datasci 203 Team 2: Shyam Patel, Vishal Saxena, Daniel Wang" 
+output:
+  bookdown::pdf_document2: 
+    toc: true
+    number_sections: true
+---
+
+\newpage
+\setcounter{page}{1}
+
+```{r load packages/data and set options, include=FALSE}
+library(tidyverse) 
+library(magrittr)
+library(knitr)
+library(patchwork)
+library(kableExtra)
+library(rstatix)
+theme_set(theme_bw())
+
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(echo=FALSE, message=FALSE)
+
+anes_raw_data <- read.csv('anes_pilot_2022_csv_20221214.csv')
+```
+
+
+# Introduction
+
+In recent years, national elections have been decided by progressively narrower margins. The 2016 presidential election was decided by margins between 0.2% and 0.8% in the battleground states of Michigan, Pennsylvania, and Wisconsin\footnote{Ballotpedia. "Presidential battleground states, 2016." (n.d.).}. This effect gets magnified due to the "winner take all" nature of the Electoral College at the state level. In response to this environment, political campaigns have increasingly emphasized voter turnout as a key strategy in winning elections.  
+
+Voter turnout can be affected by many factors such as motivation and logistical difficulties. This study will focus on assessing the latter. As a first step, this analysis aims to address the following research question:
+
+\begin{quote}
+  \textit{Do either Democrats or Republicans experience more difficulty voting than the other?}
+\end{quote}
+
+The answer to this question can shed some light on systematic obstacles to voter turnout. Findings from this study could then be used to plan more focused studies around specific factors and the effectiveness of various interventions against those factors. In turn, such studies could be used as a resource for political strategists and voter turnout groups. Additionally, if certain factors are found to be causing a discrepancy, they could also be used to justify institutional action to address concerns. This would presumably be done with the goal of increased civic participation and higher levels of proper representation.
+
+# Data Background
+
+Our analysis uses data from the 2022 American National Election Studies (ANES) Pilot Study, which provided data about voting and public opinion after the 2022 midterm elections. Data was gathered through a YouGov survey given to US citizens aged 18 or older. Respondents were selected with non-probability sampling to match the 2019 American Community Survey (ACS) sample by gender, age, race, and education, and were meant to be representative of the U.S. population. Survey weights were also applied to conform to population demographics, but they will not be used here due to the nature of the statistical techniques utilized.
+
+# Conceptualization and Operationalization
+
+To begin answering our research question, we first define our input and output variables. Respectively, these are party affiliation and voting difficulty. Both of these variables are self-reported and subjective, which needs to be kept in mind when assessing the results. There is an implicit assumption that voter sensibilities are equal when answering these questions. All respondents are considered eligible voters, which is the starting point of this analysis. Respondents will be excluded if they stated that they did not vote, as it is required to measure difficulty properly (see below for details). Petrocik showed in a 2009 study that voters who identify as "leaners" are not Independent and typically vote in the direction that they lean\footnote{Petrocik, John Richard. "Measuring party support: Leaners are not independents." Electoral Studies 28 (2009): 562-572.}. However, pure Independents will be filtered out of this study since they can not be safely binned into either party.
+
+To operationalize for party affiliation (our input), we begin with the ordinal variable “pid_x”, which is a composite data field from several survey questions to determine a respondent’s political affiliation. The field “pid7” is similar but is mined from a respondent’s profile and not their survey response. To avoid temporal effects, this field is being ignored in favor of “pid_x”. Using Petrocik’s study, respondents will be grouped into party affiliations by the direction they say they lean. This would place values 1-3 in the Democrat group and values 5-7 in the Republican group, yielding a categorical data field with two possible groups. As stated above, Independents that don’t lean in either direction will be filtered out from the analysis.
+
+Voting difficulty (the output) will be modeled with the ordinal variable “votehard”, which is a Likert scale describing overall difficulty in voting. This field ranges from 1 (“not difficult at all”) to 5 (“extremely difficult”). This question was not asked of respondents that stated they did not vote, so those observations will be filtered out as mentioned above. While we could instead utilize the specific measures in the "vharder" category that encompass all participants, including non-voters, these variables are binary and cannot be easily incorporated into a single statistical test. Most notably, a composite "vharder" measure would still lack the granularity of an ordinal scale, and it would be difficult to assign a meaningful weight to each response. For instance, "bad weather" could indicate either light rain or severe storms, while "long wait time" could mean a 15-minute delay or a 5-hour queue. Without a clear framework to transition these binary responses into an ordinal format, "votehard" remains the most appropriate measure for our analysis. Table \@ref(tab:summary-table) shows a summary of our filtering criteria to the final sample. Figure \@ref(fig:plot) summarizes the initial exploratory data analysis of the chosen data fields, with each level of response normalized by total response count per party. Normalization was done to avoid potential misrepresentations of relative difficulties due to different group sizes.  
+
+```{r data wrangling} 
+# Create new dataframe for working data (where wrangling/analysis is done)
+# Filter out participants that: stated they didn't register to vote (reg = 3) 
+# Were non-responses for Voting Difficulty (didn't indicate they voted, votehard = -1) 
+# Were non-responses for Party Affiliation (pid_x = na)
+# Or identified as Independents (pid_x = 4)
+
+# Initial sample size
+initial_sample <- anes_raw_data %>% 
+  summarise(count = n()) %>% 
+  pull(count)
+
+# Exclude participants who did not register to vote
+registered_voters <- anes_raw_data %>% 
+  filter(reg != 3) %>% 
+  summarise(count = n()) %>%
+  pull(count)
+
+# Exclude non-responses for Voting Difficulty
+with_difficulty_rating <- anes_raw_data %>% 
+  filter(reg != 3 & votehard != -1) %>% 
+  summarise(count = n()) %>%
+  pull(count)
+
+# Exclude non-responses for Party Affiliation
+with_party_affiliation <- anes_raw_data %>% 
+  filter(reg != 3 & votehard != -1 & !is.na(anes_raw_data$pid_x)) %>% 
+  summarise(count = n()) %>%
+  pull(count)
+
+# Exclude independents
+non_independents <- anes_raw_data %>% 
+  filter(reg != 3 & votehard != -1 & !is.na(anes_raw_data$pid_x) & anes_raw_data$pid_x != 4) %>% 
+  summarise(count = n()) %>%
+  pull(count)
+
+# Combined conditions to get just the working data
+
+working_data <- anes_raw_data %>%
+  filter(reg != 3 & votehard != -1 & !is.na(anes_raw_data$pid_x) & anes_raw_data$pid_x != 4)
+
+# Drop all fields from working_data except "pid_x" and "votehard"
+
+working_data <- working_data[c('pid_x', 'votehard')]
+
+# Add Party variable to keep track of group assignment
+# Assume Democrat for all leanings of Democrat (pid_x < 4)
+# Assume Republican for all leanings of Republican (pid_x > 4) 
+working_data <- working_data %>%  mutate(Assumed_Party = case_when
+                           ( (pid_x < 4) ~ "Democrat",
+                             (pid_x > 4) ~ "Republican",
+                             TRUE ~ "NA"))
+```
+
+```{r data wrangling summary}
+summary_table <- data.frame(
+  Description = c("Initial Sample", 
+           "After Excluding Non-Registered Participants (reg = 3)", 
+           "After Excluding Non-Responses for Voting Difficulty (votehard = -1)", 
+           "Final Sample (After Excluding Independents (pid_x = 4))"),
+  Count = c(initial_sample, 
+            registered_voters, 
+            with_difficulty_rating, 
+            non_independents)
+)
+```
+
+```{r summary-table}
+kable(
+  summary_table,
+  caption = "Sample Reduction by Filtering Criteria", 
+  booktabs = TRUE
+) %>% 
+  column_spec(2, width = "5cm")
+```
+
+```{r descriptive statistics} 
+
+# Summary of votehard data by party, mean, median, and num of samples
+votehard_summary_by_party <- working_data %>%
+  group_by(Assumed_Party) %>%
+  summarize(
+    Median = median(votehard, na.rm = TRUE),
+    Mean = mean(votehard, na.rm = TRUE),
+    Count = n()  # Add sample count
+  )
+
+# Extract the sample size of the two populations for statistical testing and normalization
+Democrat_sample_size <- as.numeric(votehard_summary_by_party[votehard_summary_by_party$Assumed_Party == "Democrat", "Count"])  # sample size Democrats
+Republican_sample_size <- as.numeric(votehard_summary_by_party[votehard_summary_by_party$Assumed_Party == "Republican", "Count"])  # sample size Republicans
+
+# Calculate votehard counts outside of ggplot for normalization by count per party
+Democrats_graphing <- working_data %>%
+  filter(Assumed_Party == "Democrat") %>% 
+  count(votehard)
+Republicans_graphing <- working_data %>%
+  filter(Assumed_Party == "Republican") %>% 
+  count(votehard)
+
+# Actual normalization step
+Democrats_graphing$n <- (Democrats_graphing$n / Democrat_sample_size) * 100
+Republicans_graphing$n <- (Republicans_graphing$n / Republican_sample_size) * 100
+
+# Compare "no difficulty scores" for both parties, used in practical analysis for conclusion
+No_Difficulty_Difference = abs(round(Democrats_graphing$n[1]-Republicans_graphing$n[1], 2))
+
+# Join data for plotting with party labels
+Democrats_graphing <- Democrats_graphing %>%
+  mutate(Assumed_Party = "Democrat")
+Republicans_graphing <- Republicans_graphing %>%
+  mutate(Assumed_Party = "Republican")
+
+Graphing_Data = rbind(Democrats_graphing, Republicans_graphing)
+
+# Output summary table and bar graph
+difficulty_bar_graph <- ggplot(Graphing_Data, aes(x = votehard, y = n, fill = Assumed_Party)) +
+  geom_bar(stat = "identity", color = "black", position = "dodge") +
+  scale_fill_manual(values = c("Democrat" = "royalblue", "Republican" = "red")) +
+  labs(title = "Distribution of Voting Difficulty Scores by Party Leaning", 
+       x = "Voting Difficulty Scores (1 = Not Difficult, 5 = Extremely Difficult)", y = "Portion of Voters in Party (%)", fill = "Assigned Party") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "inside",
+    legend.position.inside = c(0.88, 0.8),
+    legend.background = element_rect(fill = "white", color = "black")
+  )
+```
+
+```{r plot, fig.cap='Percentage of total Democrats (blue) vs total Republicans (red) at each Voting Difficulty score', fig.height = 4}
+difficulty_bar_graph
+```
+
+# Hypothesis and Test Selection
+
+The null hypothesis of the study is as follows: The probability that a randomly selected Democrat experiences more difficulty voting than a randomly selected Republican is equal to the reverse scenario. In probability notation: $P(X>Y) = P(X<Y)$
+
+The alternative hypothesis is that these two probabilities are not equivalent. In probability notation: $P(X>Y) \ne P(X<Y)$
+
+With X being Democrat "votehard" scores and Y being Republican "votehard" scores. We will employ a two-tailed test with a standard 0.05 significance level, giving a 5% chance of a Type I Error if we reject the null hypothesis. Since this study is comparing two groups with ordinal unpaired data, the Wilcoxon Rank Sum Test has been selected. Specifically, the Hypothesis of Comparisons variation will be used as the Hypothesis of Means variation requires metric data. 
+
+The first assumption of this test is the presence of at least ordinal data. This is most likely true given that “votehard” has a 1-5 scale with a specific order. There is a risk of different ordinal data points not being truly equivalent despite being recorded as the same value because different subjects are being surveyed and individual sensibilities towards difficulty could vary with them. There could also be some association between personality and reporting tendencies that could correlate with political affiliations. For example, one party’s constituents could be more comfortable reporting difficulties than the other in the exact same circumstances. Violation of this assumption would result in a lower resolution measurement of difficulty than we expected.
+
+The second assumption is that the data is independent and identically distributed. This is questionable due to the exclusion of respondents that did not vote. It is plausible to assume that some number of voters were not able to vote because voting proved to be too difficult. Apart from this concern, the study will be assuming that the ANES has adhered to IID practices when designing their sampling methodology. Violation of this assumption would likely present an incomplete picture of each party, though discrepancies in political proportions relative to the population should be adjusted for within the test. A somewhat larger/smaller sample size for one party should not result in a proportionate loss in statistical power.
+
+
+```{r Statistical test, echo = TRUE } 
+# Wilcoxon Rank Sum Test (Hypothesis of Comparisons)
+wilcoxon_test_result <- wilcox.test(
+  votehard ~ Assumed_Party, data = working_data, conf.int = TRUE)
+```
+```{r Statistical test analysis } 
+# Extract p value and CI, rounded to have ~3 places in scientific notation for cleaner formatting
+p_value = round(wilcoxon_test_result$p.value, 9)
+confidence_interval = round(wilcoxon_test_result$conf.int, 8)
+
+# Effect size of Willcox test, rounded to 3 places
+effect_size_results = wilcox_effsize(working_data, votehard ~ Assumed_Party)[]
+r_effect_size = round(as.numeric(effect_size_results$effsize), 3)
+r_magnitude = toString(effect_size_results$magnitude)
+```
+
+# Test Results and Interpretation
+
+The Wilcoxon Rank Sum Test yielded a p-value of `r p_value`. This crosses the significance level of 0.05 selected for the test and means there is virtually no chance of a more extreme outcome under the assumption that the null hypothesis is true. It also yielded a 95% confidence interval (CI going forward) of `r confidence_interval[1]` to `r confidence_interval[2]`, which does not include zero. Both of these figures allow us to reject the null hypothesis in favor of the alternative hypothesis. To determine effect direction, we refer to the CI. Since it is positive, it suggests that the first group in the test (Democrats) is shifted by some amount higher relative to the second group (Republicans). This is also confirmed qualitatively by the normalized “votehard” counts when plotted by party affiliation (Figure \@ref(fig:plot)). With ordinal data, the magnitude of the effect cannot be determined from the CI. To do so, we used R to calculate the Effect Size Correlation, which came out to be `r r_effect_size`. The magnitude of this effect is considered to be `r r_magnitude`. 
+
+Considering all of the test results and the overall distributions of the two groups, it is clear that voters leaning Democrat tend to rate their voting experience as being more difficult relative to how voters leaning Republican rate their experience. There is a difference of `r No_Difficulty_Difference`% in voters that rate their experience as having “no difficulty at all” (a "votehard" rating of 1 and presumably the ideal outcome), with Democrats falling short of Republicans. The effect is relatively small, though it could still be important when examining very tight elections. Due to the structure of the Electoral College, very small changes in turnout can have an outsized impact on election outcomes. However, this again comes with the caveat that non-voters are excluded from this analysis. Missing data from non-voters could potentially magnify, shrink, or reverse this effect, dependent on the additional difficulty scores generated.
+
+Potential next steps to build on these insights would be to build a more granular dataset around the “vharder” variables, which go into specific factors that raise voting difficulty. A Likert scale implementation of these questions would provide extra insight into which obstacles are the most serious. More pointed studies around specific factors that can provide metric data for analysis would also lend extra clarity to any disparities. This could better quantify the magnitude of differences and likely form a more convincing argument for changes in specific policies.
+

@@ -1,0 +1,384 @@
+---
+title: "Analyzing Key Determinants of Airfare Pricing Between 1997 and 2000"
+author: "Datasci 203 Team 5: Ameya Chander, Daniel Wang, Bonnie Yang" 
+output:
+  bookdown::pdf_document2: 
+    toc: true
+    number_sections: true
+---
+
+\newpage
+\setcounter{page}{1}
+
+```{r load packages/data and set options, include=FALSE}
+library(tidyverse) 
+library(wooldridge)
+library(magrittr)
+library(knitr)
+library(patchwork)
+library(kableExtra)
+library(haven)
+library(sandwich)
+library(lmtest)
+library(stargazer)
+theme_set(theme_bw())
+
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(echo=FALSE, message=FALSE)
+
+data("airfare")
+```
+
+# Abstract
+
+This study investigates the relationship between airfare and key factors such as flight distance, market share, and passenger volume using a large-sample linear regression model. The dataset includes ~4,600 observations collected from 1997 to 2000, providing a historical perspective on airfare determinants. Analysis reveals that flight distance is the most significant predictor of airfare, with a strong positive association.
+
+\newpage
+
+# Introduction
+
+In today's digital, post-COVID world, the complexities and costs of everyday life have risen sharply, and airfare is no exception. Airline pricing has become increasingly opaque, with varying prices across websites, fluctuating rates depending on the day, and fares that often seem arbitrary. This leads us to our research question:
+
+\begin{quote}
+  \textit{How is airfare between 1997 and 2000 affected by flight distance, market presence, and passenger volume?}
+\end{quote}
+
+We selected this question specifically to examine the foundational factors driving airline pricing during a period that predates major industry shifts, such as the post-9/11 restructuring and the rise of airline monopolies. Recent studies have highlighted the role of models like “continuous revenue management,” which assigned variable prices to seats on the same flight\footnote{Walsh, D. (2023, October 20). Research shows how airline pricing really works. Haas News | Berkeley Haas.}; however, focusing on this historical period allows us to explore the impacts of demand, competition, and distance without the added complexities of modern tools like online price comparison websites or loyalty programs. Ultimately, understanding these historical dynamics lays the groundwork for analyzing how these factors continue to shape airfare pricing today.
+
+# Description of Data Source
+
+We will use Wooldridge’s airfare dataset provided by the Department of Economics of Michigan State University. The data points are drawn from the Domestic Airline Consumer Report by the U.S. Department of Transportation. There are a total of 4596 observations from 1997 to 2000. We are interested in 3 features -- airline market concentration, flight distance, and average passenger counts -- and how they influence airfare within this time period.
+
+```{r data transformations}
+data_avg <- airfare %>% 
+  group_by(id) %>% 
+  summarise(
+    avg_fare = mean(fare, na.rm = TRUE),  # Average of fare
+    avg_dist = mean(dist, na.rm = TRUE),  # Average of dist (though values do not change from original)
+    avg_passen = mean(passen, na.rm = TRUE),  # Average of passengers
+    avg_bmktshr = mean(bmktshr, na.rm = TRUE)  # Average of market share
+  ) %>% 
+  mutate(log_passen = log(avg_passen)) %>%  # Log passengers
+  mutate(avg_bmktshr_perc = avg_bmktshr * 100)  # Percent form of avg market share
+```
+
+# Data Wrangling
+
+Upon reviewing the dataset, it appears to be clean and well-organized. The data is structured by years, with four data points recorded for each route ID per year. Importantly, there are no missing (NULL) values, as shown in Table @ref(tab:summary-table). The dataset contains 14 columns, including six raw data fields and eight derived columns, such as boolean indicators for different years and log transformations of airfare, distance, and passenger volume.
+
+However, limited documentation of the variables required further exploration to clarify certain relationships. For instance, we investigated whether multiple unique distances were associated with a single route ID. By removing duplicates based on route and distance pairs, we confirmed a one-to-one relationship between these variables. In addition, the purpose of the “biggest carrier market share” feature (“bmktshr”) was initially unclear. Through exploration, we observed that this value varies by route and year, as shown in Table @ref(tab:initial-data), indicating that the dataset captures the market share of the *dominant airline* on a given route for a specific year. All in all, the dataset is well-prepared for analysis, with minimal need for additional cleaning or transformations, making it a convenient resource for our study.
+
+# Operationalization
+
+The three variables identified for this analysis -- flight distance, market presence, and passenger volume -- are the primary metrics provided by the dataset. All observations are included, as the dataset is already cleaned and all data points are relevant to the study. A brief definition of each concept is provided below:
+
+- **Airfare**: The average one-way price per passenger on a specific route.
+- **Flight distance**: The distance in miles between two locations.
+- **Market presence**: The largest market share held by a specific carrier on a given route. This value changes yearly based on the dominant airline, but the specific airline details are not provided and are not relevant to this analysis. 
+- **Passengers**: The average number of passengers per day for the route. 
+
+There are several potential approaches to answering the research question. One option we considered was comparing coefficients across the four years to identify trends and variations, which could reveal insights into evolving pricing strategies. For example, a consistent increase in the coefficient for market presence might suggest growing price-setting power among dominant airlines. However, the limited data points (each route ID only has four observations) made it challenging to conduct year-to-year analyses. Figure @ref(fig:airfare-by-year) in the Appendix shows only minimal year-to-year changes in average airfare prices, with a gradual upward trend. Ultimately, we decided to apply a model that averages the values across all four years to assess the overall impact during the time period studied.
+
+```{r data wrangling summary}
+summary_table <- t(colSums(is.na(airfare)))
+```
+
+```{r summary-table, results = 'asis'}
+kable(
+  summary_table,
+  caption = "Checking for NULL Values in the Dataset", 
+  booktabs = TRUE
+)
+```
+
+```{r variable exploration}
+variable_exploration <- airfare[1:4, 1:6]
+```
+
+```{r initial-data}
+kable(
+  variable_exploration,
+  caption = "Data for One Unique Flight ID", 
+  booktabs = TRUE
+) %>% 
+  column_spec(2:6, width = "2cm")
+```
+
+```{r airfare-x-indep-var}
+# Plotting individual comparison plots against airfare
+plot_fare_vs_dist <- data_avg %>% 
+  ggplot(aes(x = avg_dist, y = avg_fare)) +
+  geom_point(size = 0.8) +
+  labs(title = "(a) Airfare vs Distance", 
+       x = "Distance (mi)", y = "Airfare ($)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_fare_vs_bmktshr <- data_avg %>% 
+  ggplot(aes(x = avg_bmktshr_perc, y = avg_fare)) +
+  geom_point(size = 0.8) +
+  labs(title = "(b) Airfare vs Biggest Market Share", 
+       x = "Carrier w Biggest Market Share (%)", y = "Airfare ($)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_fare_vs_passen <- data_avg %>% 
+  ggplot(aes(x = avg_passen, y = avg_fare)) +
+  geom_point(size = 0.8) +
+  labs(title = "(c) Airfare vs Passengers", 
+       x = "Passengers", y = "Airfare ($)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_fare_vs_lpassen <- data_avg %>% 
+  ggplot(aes(x = log_passen, y = avg_fare)) +
+  geom_point(size = 0.8) +
+  labs(title = "(d) Airfare vs Ln(Passengers)", 
+       x = "Ln(Passengers)", y = "Airfare ($)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r fare-vs-indep, fig.cap="Comparing airfare with (a) distance, (b) market share, (c) passengers, and (d) ln(passengers).", fig.height = 3.9}
+(plot_fare_vs_dist | plot_fare_vs_bmktshr) / (plot_fare_vs_passen | plot_fare_vs_lpassen)
+```
+
+```{r model-short}
+# Regressing airfare on just distance
+model_short <- lm(avg_fare ~ avg_dist, data = data_avg)
+
+# Getting robust standard errors
+se_model_short <- sqrt(diag(vcovHC(model_short, type = "HC0")))
+
+# Performing coeftest with robust standard errors due to large-sample assumptions
+model_short_coeftest <- coeftest(model_short, vcov = vcovHC(model_short, type = "HC0"))
+```
+
+```{r model-long-a}
+# Modeling full airfare model with no transformations
+model_a <- lm(avg_fare ~ avg_dist + avg_passen + avg_bmktshr_perc, data = data_avg)
+
+# Getting robust standard errors
+se_model_a <- sqrt(diag(vcovHC(model_a, type = "HC0")))
+
+# Performing coeftest with robust standard errors
+model_a_coeftest <- coeftest(model_a, vcov = vcovHC(model_a, type = "HC0"))
+```
+
+```{r model-long-b}
+# Modeling with passenger log transformation
+model_b <- lm(avg_fare ~ avg_dist + log_passen + avg_bmktshr_perc, data = data_avg)
+
+# Getting robust standard errors
+se_model_b <- sqrt(diag(vcovHC(model_b, type = "HC0")))
+
+# Performing coeftest with robust standard errors
+model_b_coeftest <- coeftest(model_b, vcov = vcovHC(model_b, type = "HC0"))
+```
+
+# Model Specification
+
+To begin, we explored the relationship between airfare and distance through a simple linear regression, as these two variables are most commonly linked. This analysis revealed a positive linear relationship, where longer distances correlate with higher airfares (Fig @ref(fig:fare-vs-indep)a). The coefficient for distance was highly significant, with a p-value of 2.2e-16, well below the 0.05 threshold. The coefficient estimate of 0.076 indicates that for every additional mile flown, the price increases by approximately 7.6 cents. To put it into relative terms, for every 100 miles flown (roughly the distance from LA to San Diego), the price increases by $7.63. These findings provide strong evidence of a significant relationship between distance and airfare.
+
+Next, we examined whether the other key factors -- passenger volume and market share -- also influence airfare. Visual exploration suggested that market share has a roughly linear relationship with airfare (Fig @ref(fig:fare-vs-indep)b), requiring no transformation. However, passenger volume showed a strong skew (Fig @ref(fig:fare-vs-indep)c), with most of the data concentrated on the left-hand side. This provided justification for a log transformation, which improved the distribution but still indicated a weak correlation with airfare (Fig @ref(fig:fare-vs-indep)d).
+
+We extended our analysis with two multiple linear regression models: one including distance, passenger volume, and market share as predictors, and another substituting passenger volume with its natural logarithm (ln(passengers)). The results of these models are summarized in Table 3 below:
+
+```{r stargazer-table, warning = FALSE, message = FALSE, results = 'asis'}
+stargazer(
+  model_short, model_a, model_b,
+  type = "latex",
+  title = "Regression Table for Airfare Analysis",
+  dep.var.labels = c("Airfare (\\$)"),
+  covariate.labels = c(
+    "Distance (mi)",
+    "Passengers",
+    "Ln Passengers",
+    "Market Share (\\%)"
+  ),
+  se = list(se_model_short, se_model_a, se_model_b),
+  star.cutoffs = c(0.05, 0.01, 0.001),  # Significance levels
+  notes = c(
+    "Column 1 (Model Short): Includes just distance as a predictor.",
+    "Column 2 (Model A): Includes all predictors without transformations.",
+    "Column 3 (Model B): Replaces average passengers with log-transformed passengers."
+  ),
+  header = FALSE
+)
+```
+
+# Model Assumptions
+
+Due to the sample size, the large-sample linear model assumptions apply:
+
+1. Independent and Identically Distributed (IID) Data:
+- While the data may be identically distributed if collected properly by the authors, independence is likely violated as airfare is influenced by market conditions, which depend on other flights. Additional information on geographic clustering for airlines, routes, or connecting flights could provide better insights into potential dependencies. Nevertheless, despite the likely violation of IID, we consider this dataset suitable for analysis, assuming the authors accounted for the spatial clustering effects. Temporal clustering is likely not a concern, as we averaged data over the four-year timeframe and observed minimal variation.
+2. Unique BLP Exists:
+- A BLP **exists** when $\text{cov}[X_i, X_j]$ and $\text{cov}[X_i, Y]$ are finite (no heavy tails): Although most of the variables do not exhibit heavy tails, the "passengers" variable shows a noticeable right skew (Fig @ref(fig:fare-vs-indep)c), raising questions about this condition. However, with a large sample size, variances are likely still finite. To address the skewness, we applied a log transformation to the "passengers" variable, which effectively mitigated this condition.
+- A BLP is **unique** when there is no perfect collinearity ($E[X^TX]$ is invertible): This condition is likely fulfilled as our model did not drop any variables, indicating that no $X_i$ can be written as a linear combination of the other X's (and therefore the X's have unique variation).
+
+# Model Results and Interpretation
+
+```{r f-test-both-vars}
+# Conducting F-test (Wald Test) on the addition of market share and ln(passengers).
+f_test_b <- waldtest(model_b, model_short, vcov = vcovHC(model_b))  # Significant (p-value <2.2e-16)
+```
+
+```{r f-test-single-var}
+# Creating models of adding just one additional variable (market share or ln(passengers)).
+model_m <- lm(avg_fare ~ avg_dist + avg_bmktshr, data = data_avg)
+model_p <- lm(avg_fare ~ avg_dist + log_passen, data = data_avg)
+
+# Conducting (Wald Test) on the addition of market share and ln(passengers) individually.
+f_test_m <- waldtest(model_m, model_short, vcov = vcovHC(model_m))  # Significant (p-value 4.202e-14)
+f_test_p <- waldtest(model_p, model_short, vcov = vcovHC(model_p))  # Significant (p-value 2.146e-06)
+```
+
+Adding more variables -- biggest market share and average passengers per day -- yields a different perspective. The coefficient for biggest market share is statistically significant (p-value = 1.23e-12) with an estimate of 0.772, meaning that for every additional percent of market share, airfare increases by \$0.77. Given that market share ranges from 16% to 100% (0.16 to 1.0), the maximum possible impact of this variable is \$64 (indicating a full monopoly on a particular route), assuming all other factors remain constant. However, such extreme scenarios are rare, and in most cases, the effect of market share on airfare is considerably smaller compared to the influence of distance.
+
+In contrast, average passengers per day was not significant in the untransformed model (p-value = 0.07), which was expected as seen in Figure @ref(fig:fare-vs-indep)c. After applying the log transformation, the coefficient for log passengers becomes significant (p-value = 7.473e-05), with an estimate of -7.23. This indicates that a small $\alpha$% increase in passengers leads to a decrease in airfare of approximately 7.23$\alpha$. For example, a 10% increase in passengers leads to a $0.72 decrease in price. While statistically significant, practically speaking, this effect is nearly negligible compared to the influence of distance.
+
+F-tests confirm that adding biggest market share, log passengers, or both, all significantly improve the model (p-values of 4.202e-14, 2.146e-06, and 2.2e-16, respectively). This indicates that these variables enhance the model's explanatory power beyond the simple regression of airfare on distance. Nevertheless, while adding these coefficients is statistically significant, their practical significance is minimal compared to the dominant impact of distance on airfare.
+
+Overall, our analysis revealed that **distance** remains the strongest predictor of average fare, likely due to the costs of fuel and other expenses associated with longer routes. It would be interesting to investigate how market share influences fare in the modern era. Future analyses could explore time-based trends, as our dataset's limitations (such as averaging data across four years) may obscure temporal effects. Additional variables -- such as specific route distances, locations/popularity of routes, airport characteristics, and booking factors -- would also provide valuable insights into airfare determinants.
+
+\newpage
+
+# Appendix
+
+Link to data source:  http://fmwww.bc.edu/ec-p/data/wooldridge2k/AIRFARE.DES
+
+```{r airfare-by-year-calculations}
+grouped_by_year <- aggregate(airfare$fare, by=list(Year=airfare$year), FUN=mean)
+
+airfare_by_year <- grouped_by_year %>% 
+  ggplot(aes(y = x, x = Year)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Airline Prices by Year", 
+       x = "Year", y = "Average Airfare ($)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r airfare-by-year, fig.cap="Average airfare prices over the years.", fig.width = 5, fig.height = 3}
+airfare_by_year
+```
+
+```{r resid-vs-fitted-and-dist-model-short}
+# Checking fitted vs residuals plot
+plot_resid_vs_fitted_short <- data_avg %>% 
+  ggplot(aes(x = predict(model_short), y = resid(model_short))) +
+  geom_point() +
+  stat_smooth() +
+  labs(title = "Residuals vs Fitted (for just Distance)", 
+       x = "Predictions (Airfare $)", y = "Residuals (Model S)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_resid_vs_dist_short <- data_avg %>% 
+  ggplot(aes(x = avg_dist, y = resid(model_short))) +
+  geom_point() +
+  stat_smooth() +
+  labs(title = "Residuals vs Distance", 
+       x = "Distance (mi)", y = "Residuals (Model S)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r resid-vs-fitted-model-short, fig.cap="Comparing residuals vs predictions for single-variable (distance) model.", fig.width = 5, fig.height = 3}
+plot_resid_vs_fitted_short
+```
+
+We want to see if there's more to the story than just the distance shaping the airfare, which leads to the graphs below:
+\newpage
+
+```{r resid-vs-fitted-model-a-code}
+# Plotting residuals vs prediction (and indep. variable) plots without transformations
+plot_resid_vs_fitted_a <- data_avg %>% 
+  ggplot(aes(x = predict(model_a), y = resid(model_a))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Predictions", 
+       x = "Predictions (Airfare $)", y = "Residuals (Model A)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+
+plot_resid_vs_dist_a <- data_avg %>% 
+  ggplot(aes(x = avg_dist, y = resid(model_a))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Distance", 
+       x = "Distance (mi)", y = "Residuals (Model A)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+
+plot_resid_vs_passen_a <- data_avg %>% 
+  ggplot(aes(x = avg_passen, y = resid(model_a))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Passengers", 
+       x = "Passengers", y = "Residuals (Model A)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+
+plot_resid_vs_bmktshr_a <- data_avg %>% 
+  ggplot(aes(x = avg_bmktshr_perc, y = resid(model_a))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Biggest Market Share", 
+       x = "Carrier w Biggest Market Share (%)", y = "Residuals (Model A)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+```
+
+```{r resid-vs-fitted-model-a, fig.cap="Comparing residuals vs fitted and independent variable plots without transformations.", fig.width = 5.5, fig.height = 3.3}
+(plot_resid_vs_dist_a | plot_resid_vs_passen_a) / (plot_resid_vs_bmktshr_a | plot_resid_vs_fitted_a)
+```
+
+And lastly, we want to analyze the final, transformed model (with log of passengers).
+
+```{r resid-vs-fitted-model-b-code}
+# Plotting residuals vs prediction (and indep. variable) plots with passenger log transformation
+plot_resid_vs_fitted_b <- data_avg %>% 
+  ggplot(aes(x = predict(model_b), y = resid(model_b))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Predictions", 
+       x = "Predictions (Airfare $)", y = "Residuals (Model B)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+
+plot_resid_vs_dist_b <- data_avg %>% 
+  ggplot(aes(x = avg_dist, y = resid(model_b))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Distance", 
+       x = "Distance (mi)", y = "Residuals (Model B)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+
+plot_resid_vs_passen_b <- data_avg %>% 
+  ggplot(aes(x = log_passen, y = resid(model_b))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Ln(Passengers)", 
+       x = "Ln(Passengers)", y = "Residuals (Model B)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+
+plot_resid_vs_bmktshr_b <- data_avg %>% 
+  ggplot(aes(x = avg_bmktshr_perc, y = resid(model_b))) +
+  geom_point(size = 0.7) +
+  stat_smooth() +
+  labs(title = "Residuals vs Biggest Market Share", 
+       x = "Carrier w Biggest Market Share (%)", y = "Residuals (Model B)") +
+  theme(plot.title = element_text(hjust = 0.5, size = 11),
+        axis.title.x = element_text(size = 9),
+        axis.title.y = element_text(size = 9))
+```
+
+```{r resid-vs-fitted-model-b, fig.cap="Comparing residuals vs fitted and independent variable plots with log transform on passengers.", fig.width = 5.5, fig.height = 3.3}
+(plot_resid_vs_dist_b | plot_resid_vs_passen_b) / (plot_resid_vs_bmktshr_b | plot_resid_vs_fitted_b)
+```
+
+

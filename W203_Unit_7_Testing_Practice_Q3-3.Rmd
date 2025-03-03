@@ -1,0 +1,49 @@
+---
+output:
+  pdf_document: default
+---
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(wooldridge)
+
+happiness <- read.csv("happiness_WHR.csv")
+legis <- read.csv("legislators-current.csv")
+GSS <- read.csv("GSS_religion.csv")
+```
+
+Validating assumptions for the Wilcoxon signed-rank test:
+
+1. Metric scale. In particular, X and Y are both measured on the same metric scale.
+
+From the Wooldridge website, the heart and liver diseases are both measured in deaths per 100,000.
+```{r, echo = FALSE}
+data("wine")
+head(wine)
+# The number of deaths of the heart and the liver are both measured per 100,000 people. Thus, both variables are measured on the same metric scale.
+```
+The number of deaths of the heart and the liver are both measured per 100,000 people. Thus, both variables are measured on the same metric scale.
+
+2. IID data. Each pair Xi, Yi, is drawn from the same distribution, independently of all other pairs.
+
+This data is not necessarily independent since countries in certain European countries that are connected might have similar wine-drinking tendencies, and countries close together might come from similar ethnic groups (thus a spatial clustering problem). It also might not be identically distributed because countries could have different diets, and chances of getting heart disease or liver disease might be higher in certain places than others. Even though human genetics might give any person a set chance of getting heart or liver disease, we would overall lean towards rejecting this assumption.
+
+3. The distribution of the difference X-Y is symmetric around some mean.
+
+As this test relies on the ranking of the absolute values of differences, it will only make sense if the distribution of the difference X-Y is symmetric around some mean. Thus, there is an equal chance for positive and negative differences to occur, assuming that symmetrical distribution. We can test what the difference around the mean looks like and see if it's roughly symmetric:
+
+```{r, echo = FALSE, fig.height=3, fig.width=5, fig.align='center'}
+wine %>% 
+  mutate(difference = heart - liver) %>% 
+  ggplot(aes(x = difference)) +
+  geom_histogram(binwidth = 50) +
+  geom_vline(aes(xintercept = mean(difference, na.rm = TRUE)), linetype = "dashed") +
+  labs(title = "Difference Between Heart and Liver Deaths",
+       x = "Difference in Deaths (Heart - Liver)",
+       y = "Count")
+```
+
+Because the sample size is small (n=21), it's hard to tell whether the data is symmetric around the mean. I would lean towards no on this scale, but if you increase the binwidth to 75 or 100, it looks closer to symmetry. Nevertheless, in this case, the data does not seem to fulfill the symmetry assumption. One more thing to keep note of is that it is not necessary for the X and Y distributions to be symmetric individually (only the difference matters in a Wilcoxon signed-rank test).
+
+Conclusion: While assumption 1 is met and assumption 3 is questionable, the data is likely not IID (assumption 2), so the Wilcoxon signed-rank test does not apply here.
+
+

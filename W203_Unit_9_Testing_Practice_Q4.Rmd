@@ -1,0 +1,235 @@
+---
+output:
+  pdf_document: default
+---
+```{r, message=FALSE, echo=FALSE}
+library(tidyverse)
+library(sandwich)
+library(lmtest)
+library(patchwork)
+library(stargazer)
+
+theme_set(theme_minimal())
+
+## install the package if it's not installed
+library(fec16)
+
+data("candidates")
+data("results_house")
+data("campaigns")
+```
+Q4 Federal Elections Exercise
+
+## Q4.1 Exploring - Make Histograms
+```{r, warning = FALSE}
+general_percent_chart <- results_house %>% 
+  ggplot(aes(x = general_percent)) +
+  geom_histogram() +
+  labs(title = "Distribution of Votes (General Percent)",
+       x = "Percent of Vote",
+       y = "Count") +
+  theme_minimal()
+
+ttl_disb_chart <- campaigns %>% 
+  ggplot(aes(x = ttl_disb)) +
+  geom_histogram() +
+  xlim(-1000000, 10000000) +
+  labs(title = "Distribution of Campaign Spending (Total Disbursements)",
+       x = "Total Disbursements ($)",
+       y = "Count") +
+  theme_minimal()
+
+general_percent_chart | ttl_disb_chart
+# Multi-modal distribution, so there's likely data that's smushed-together on one graph
+```
+
+\null
+\newpage
+
+## Q4.2 Exploring - Build a Data Frame pt 1
+```{r}
+results_campaigns <- inner_join(
+  results_house,
+  campaigns,
+  by = 'cand_id'
+)
+```
+
+This comes with 1342 rows of data.
+
+\null
+\null
+
+## Q4.3 Exploring - Build a Data Frame pt 2
+
+There are 37 columns of data.
+
+\null
+\newpage
+
+## Q4.4 Exploring - Indicator Variables and Scatter Plot
+```{r, warning = FALSE}
+results_campaigns <- results_campaigns %>% 
+  mutate(candidate_party = case_when(
+    party == 'REP' ~ 'Republican',
+    party == 'DEM' ~ 'Democrat',
+    TRUE ~ 'Other Party'
+  ))
+
+results_campaigns %>% 
+  mutate(candidate_party = factor(candidate_party,
+                                  levels = c("Democrat",
+                                             "Republican",
+                                             "Other Party"))) %>% 
+  ggplot(aes(x = ttl_disb, y = general_votes, color = candidate_party)) +
+  geom_point() +
+  scale_color_manual(values = c("Democrat" = "royalblue",
+                                "Republican" = "red",
+                                "Other Party" = "green")) +
+  labs(title = "Comparing General Votes Against Total Disbursements Between Parties",
+       x = "Total Disbursements ($)",
+       y = "General Votes",
+       color = "Assigned Party") +
+  theme_minimal()
+```
+
+\null
+\newpage
+
+## Q4.5 Regression - Evaluate large sample assumptions
+
+Regression:
+```{r}
+ls_model <- lm(general_votes ~ ttl_disb + candidate_party, data = results_campaigns)
+
+# Formula for kurtosis (measure of "tailedness")
+ls_model_res <- ls_model$residuals
+ls_model_kurtosis <- (sum((ls_model_res - mean (ls_model_res)) ^ 4) /
+                        length(ls_model_res)) / (var(ls_model_res) ^ 2) - 3
+
+# Variance-covariance matrix to make sure covariances between Xi's are finite
+vcov(ls_model)
+
+# Covariance of general_votes and ttl_disb to test X and Y cov
+cov(results_campaigns$general_votes, results_campaigns$ttl_disb, use = "complete.obs")
+```
+
+Assumptions:
+
+1. IID data
+  - IID data likely does not exist because a relationship exists between those fighting for the same votes in a district. For example, if the total votes for a party is 1 million, and the Democrat has 700,000 of them, the Republicans and individuals from Other Parties can get at most 300,000 votes combined. There's likely also geographic clustering effects, or strategic interactions among those of the same party, further violating IID.
+
+2. Unique BLP exists
+  - A BLP exists when $\text{cov}[X_i, X_j]$ and $\text{cov}[X_i, Y]$ are finite (no heavy tails): this condition is questionable, as calculating kurtosis (measure of "tailedness") through the formula written above gives a value of 25.96, indicating extremely heavy tails. This might indicate that a BLP may not exist; however, looking at the data itself shows that these heavy tails may not be infinite. Calculating $\text{cov}[X_i, X_j]$ for all the X's, we see in the vcov matrix that the values do appear to finite - though large - and calculating $\text{cov}[X_i, Y]$ for just ttl_disb (since candidate_party is categorical), we see that it's also quite large (2.3e10) - though technically still finite. This leaves some room for debate on whether the BLP does exist, and if we wanted to ensure that it does (for future tests), we may try using a log transform to remove these heavy tails.
+  - A BLP is unique when there is no perfect collinearity ($E[X^TX]$ is invertible): this condition is likely fulfilled, as any $X_i$ cannot be written as a linear combination of the other X's (and therefore the X's have unique variation).
+
+\null
+\newpage
+
+## Q4.5 (Additional code upload and regression summary)
+
+```{r}
+# Code used to create candidate_party from earlier:
+
+# results_campaigns <- results_campaigns %>% 
+#   mutate(candidate_party = case_when(
+#     party == 'REP' ~ 'Republican',
+#     party == 'DEM' ~ 'Democrat',
+#     TRUE ~ 'Other Party'
+#   ))
+```
+
+```{r}
+# Regression results:
+summary(ls_model)
+```
+
+\null
+\newpage
+
+## Q4.6 Regression - Build a stargazer table
+
+This first table assumes homoskedasticity (constant variance of errors), using vcov for the standard errors:
+```{r, warning = FALSE, message = FALSE, results = 'asis'}
+se <- sqrt(diag(vcov(ls_model)))
+
+stargazer(ls_model, 
+          type = "latex",
+          title = "Linear Regression of General Votes on Campaign Spending and Candidate Party",
+          covariate.labels = c("Total Disbursements",
+                               "Other Party",
+                               "Republican"),
+          dep.var.labels = "General Votes",
+          se = list(se),
+          digits = 2,
+          header = FALSE)
+```
+
+With an R^2 of 0.36, which means 64% of our variance is unexplained.
+
+A second table with robust standard errors for the large sample assumption is shown below:
+
+\null
+\newpage
+
+This second table assumes heteroskedasticity (non-constant variance of errors) for the large sample assumptions, using vcovHC for robust standard errors:
+```{r, warning = FALSE, message = FALSE, results = 'asis'}
+robust_se <- sqrt(diag(vcovHC(ls_model, type = "HC0")))
+
+stargazer(ls_model, 
+          type = "latex",
+          title = "Linear Regression of General Votes on Campaign Spending and Candidate Party",
+          covariate.labels = c("Total Disbursements",
+                               "Other Party",
+                               "Republican"),
+          dep.var.labels = "General Votes",
+          se = list(robust_se),
+          digits = 2,
+          header = FALSE)
+```
+
+\null
+\newpage
+
+## Q4.7 Regression - Money's Relationship with Votes
+
+This is done with robust standard errors from the large sample assumptions, though the results are similar if assuming homoskedasticity.
+```{r}
+coeftest(ls_model, vcov = vcovHC(ls_model, type = "HC0"))
+```
+\null
+
+ttl_disb does seem to have a relationship with general votes; specifically, the coefficient of ttl_disb describes how much money you will spend for each additional vote (0.013 votes for every dollar spent). The p-value for the ttl_disb coefficient is 1.362e-11, which is far below the usual significance level of 0.05, indicating strong statistical significance; however, while the coefficient of ttl_disb is statistically significant, its practical significance is small, as an increase of $1 in disbursements leads to the aforementioned 0.013 additional votes.
+
+\null
+\null
+
+```{r}
+# Using vcov shows similar results in terms of significance
+coeftest(ls_model, vcov = vcov(ls_model))
+```
+
+\null
+\newpage
+
+## Q4.8 Regression - Party's Relationship with Votes
+
+This is done with robust standard errors from the large sample assumptions, though the results are similar if assuming homoskedasticity.
+```{r}
+short_model <- lm(general_votes ~ ttl_disb, data = results_campaigns)
+waldtest(ls_model, short_model, vcov = vcovHC(ls_model, type = "HC0"))
+```
+\null
+
+The p-value for the Wald test for the addition of candidate_party is < 2.2e-16, indicating strong statistical significance, which means the addition of candidate_party provides significant additional information about general_votes. Practically, with all other things equal and using the values from Q4.6, being Democrat (intercept) would net roughly 140,000 additional votes, being from the "Other Party" would net roughly 27,000 (140,000 - 113,000) additional votes, and being Republican would net roughly 146,500 (140,000 + 6,500) additional votes, though the result for Republicans is not significant (p-value above 0.05); therefore, while candidate_party does provide additional information, the t-test coefficients are only significant for Democrats and "Other Party" members.
+
+\null
+\null
+
+```{r}
+# Using vcov shows similar results in terms of significance
+waldtest(ls_model, short_model, vcov = vcov(ls_model))
+```
+
+
+

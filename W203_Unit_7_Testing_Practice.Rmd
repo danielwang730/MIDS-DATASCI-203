@@ -1,0 +1,163 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r}
+library(tidyverse)
+library(wooldridge)
+
+happiness <- read.csv("happiness_WHR.csv")
+legis <- read.csv("legislators-current.csv")
+GSS <- read.csv("GSS_religion.csv")
+```
+Q3.1
+Assumptions for t test:
+1. Metric scale.
+  - In particular, the t-test is not valid for variables which only have an ordinal structure.
+2. IID data.
+3. No major deviations from normality, considering the sample size.
+  - In particular, the t-test is invalid for highly skewed distributions when sample size is larger than 30. It may also be invalid for very highly skewed distributions at higher sample sizes.
+
+
+1. Metric scale validation
+```{r}
+summary(happiness$Life.Ladder)
+head(happiness)
+```
+The metric scale assumption is not held. Although the Cantril Ladder is ordered from 1 to 10, the distance between rungs might not be the same. For example, going from rung 1 to rung 2 might not be the same increase in happiness as going from rung 9 to rung 10.
+
+2. IID data validation
+The data is likely not a random sample because countries are not truly independent of each other. For example, the data includes a Freedom.to.make.life.choices variable, which may be highly correlated in democratic regions of the world (like the EU) (there's a strong spatial clustering effect). A more accurate analysis would account for this effect by employing clustered standard errors.
+There's also a temporal clustering issue, as people from 2018 may be more or less happy than those in 2020, and this is not accounted for.
+
+3. No major deviations from normality, considering the sample size.
+Since the data is not metric, this assumption doesn't have much bearing on whether or not we can run the t-test, so even if the data looks relatively symmetric, we cannot say it's normal.
+
+However, if we still want to see whether the plot looks symmetric:
+```{r}
+hist(happiness$Life.Ladder, breaks = 20, main = "Cantril Ladder Across Countries", xlab = "Cantril Ladder Scale")
+```
+The data does looks relatively symmetric (with slight left skew). If we incorrectly assume normality, the sample size is quite large, so CLT can be applied here, and we can also use a qq plot test to check for normality:
+```{r}
+qqnorm(happiness$Life.Ladder, main = "Normal Q-Q Plot for Cantril Ladder Scores")
+```
+qqplot looks relatively normal as well, but again, none of this matters since the data is not metric and therefore not normal.
+
+
+Q3.2
+Assumptions for Wilcoxon rank-sum test (hypothesis of comparisons):
+1. (At least) Ordinal scale.
+2. IID data.
+  - Each Xi is drawn from the same distribution, each Yi is drawn from the same distribution, and all Xi and Yi are mutually independent.
+
+
+1. Ordinal scale validation
+```{r, echo = FALSE}
+summary(legis)
+table(legis$type) # Confirming how many reps and sens
+legis %>%
+  count(type) # Alternate method
+legis %>% 
+  filter(type == "sen") %>% 
+  mutate(age = as.numeric(floor((today() - ymd(birthday)) / dyears(1)))) %>%
+  group_by(party) %>% 
+  summarise(count = n(),
+  mean_age = mean(age, na.rm = TRUE),
+  median_age = median(age, na.rm = TRUE),
+  min_age = min(age, na.rm = TRUE),
+  max_age = max(age, na.rm = TRUE),
+  sd_age = sd(age, na.rm = TRUE)
+)
+# Age in this dataset is definitely at least an ordinal scale, as it's actually a metric scale, and we can get metric information as show below
+```
+
+2. IID data.
+Not necessarily IID, as research has shown that voting Republicans tend to be older than voting Democrats. While this doesn't necessarily translate into the age of the senators themselves, the senators from generally democratic or republican states likely know each other and can influence each other's decisions, violating non-interference. So not independent.
+Could check as well if all the republican and democratic senators are drawn from the same distribution.
+```{r}
+legis %>% 
+  filter(type == "sen" & party %in% c("Democrat", "Republican")) %>% 
+  mutate(age = as.numeric(floor((today() - ymd(birthday)) / dyears(1)))) %>%
+  ggplot(aes(x = age, color = party)) +
+  geom_histogram(binwidth = 2) +
+  facet_wrap(~ party) +  # or facet_wrap(c("party"))
+  labs(title = "Difference in Ages Between Democrats and Republicans",
+       x = "Ages of Democrats and Republicans",
+       y = "Count")
+```
+It seems like they are from roughly the same distribution.
+
+
+Q3.3
+Assumptions for Wilcoxon signed-rank test:
+1. Metric scale. In particular, X and Y are both measured on the same metric scale.
+2. IID data. In particular, each pair Xi, Yi, is drawn from the same distribution, independently of all other pairs.
+3. The distribution of the difference X-Y is symmetric around some mean.
+
+1. Metric scale
+From the Wooldridge website for what each variable means:
+- alcohol: liters alcohol from wine, per capita
+- deaths: deaths per 100,000
+- heart: heart disease dths per 100,000
+- liver: liver disease dths per 100,000
+```{r}
+data("wine")
+head(wine)
+# The number of deaths of the heart and the liver are both measured per 100,000 people. Thus, both variables are measured on the same metric scale.
+```
+
+2. IID data
+Not necessarily independent since countries in certain European countries that are connected might have similar wine-drinking tendencies, and countries close together might come from similar ethnic groups, with similar people (problem here would be spatial clustering). Also might not be identically distributed because countries could have different diets, and chances of getting heart disease or liver disease might be higher in certain places than others. Nevertheless, all humans are roughly similar, and there's a chance that genetics and simply being a human will give you a set chance of getting heart or liver disease.
+
+3. The distribution of the difference X-Y is symmetric around some mean.
+As this test relies on the ranking of the absolute values of differences, it will only make sense if the distribution of the difference X-Y is symmetric around some mean (usually 0). Thus, there is an equal chance for positive and negative differences to occur, assuming that symmetrical distribution. In this case, just by a quick glance at the data, it's clear that the number of heart and liver diseases are very different, likely by an order of magnitude. We can test what the difference around the mean looks like and see if it's roughly symmetric:
+```{r}
+wine %>% 
+  mutate(difference = heart - liver) %>% 
+  ggplot(aes(x = difference)) +
+  geom_histogram(binwidth = 50) +
+  geom_vline(aes(xintercept = mean(difference, na.rm = TRUE)), linetype = "dashed") +
+  labs(title = "Difference Between Heart and Liver Deaths",
+       x = "Difference in Deaths (Heart - Liver)",
+       y = "Count")
+```
+Because the sample size is small, it's hard to tell whether the data is symmetric around the mean. I would lean towards no on this scale, but if you increase the binwidth to 75 or 100, it looks closer to symmetry. Nevertheless, in this case, the data does not seem to fulfill the symmetry assumption. One more thing to keep note of is that it is not necessary for the X and Y distributions to be symmetric individually (only the difference matters in a Wilcoxon signed-rank test).
+
+
+
+Q3.4
+1. Metric scale. In particular, the t-test is not valid for variables which only have an ordinal structure.
+2. IID data. In particular, each pair of measurements (Xi, Yi) is drawn from the same distribution, independently of all other pairs.
+3. The distribution of the difference between measurements has no major deviations from normality, considering the sample size. In particular, the t-test is invalid for highly skewed distributions when sample size is larger than 30. It may also be invalid for very highly skewed distributions at higher sample sizes.
+
+1. Metric scale
+```{r}
+summary(GSS)
+head(GSS)
+```
+Based on the way the thermometer was described to the participants, I would not say that the thermometer can be classified as a metric scale. Most importantly, this data is not measuring any explicit (like the number of deaths in the previous problem). This scale is more so measuring feelings (like the Likert scale), which is ordinal. For example, if someone gave a 50 rating for Protestants and someone else gave a 100 rating on Protestants, we cannot definitively say that the one who gave the 100 rating is twice as warm towards Protestants than the first person.
+
+2. IID data
+If the experimental design was done properly, the data can likely be considered independent, as survey-takers would not know each other and not have influence on one another. Assuming the GSS data is drawn from the same distribution, then the identically distributed assumption also holds.
+
+3. The distribution of the difference between measurements has no major deviations from normality, considering the sample size.
+Since the data is not metric, the assumption of normality cannot be assessed, so we cannot say that the differences between measurements have no major deviations from normality. If we DID assume normality, the sample size is quite large (802), and definitely large enough for the CLT to be applied. We can also check how skewed this dataset is (how symmetric it is):
+```{r}
+GSS %>% 
+  mutate(difference = cathtemp - prottemp) %>% 
+  ggplot(aes(x = difference)) +
+  geom_histogram(binwidth = 20) +
+  geom_vline(aes(xintercept = mean(difference, na.rm = TRUE)), linetype = "dashed") +
+  labs(title = "Difference Between Catholic and Protestant Thermometer Ratings",
+       x = "Difference in Temperature (Catholic - Protestant)",
+       y = "Count")
+```
+Thus, the graph looks relatively normal with a pretty tight distribution centered around 0, even though we cannot perform the t-test because we do not have metric data (and therefore objectively no normality).
+
+
+
+
+
+
+
